@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.*
 import coil.compose.AsyncImage
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
@@ -155,17 +156,17 @@ private fun RadioWaveApp(controller: MediaController?) {
     var showSearch by remember { mutableStateOf(false) }
     var stations by remember { mutableStateOf(store.stations()) }
     var favorites by remember { mutableStateOf(store.favorites()) }
-    var favoriteOrder by remember { mutableStateOf(store.orderedFavorites().map { it.id }) }
-    var query by remember { mutableStateOf("") }
-    var activeSection by remember { mutableStateOf(startSection) }
+    var favoriteOrder by remember { mutableStateOf(store.favoriteOrder()) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var activeSection by rememberSaveable { mutableStateOf(startSection) }
     val favoritesOnly = activeSection == "favorites"
     var showAdd by remember { mutableStateOf(false) }
     var stationToDelete by remember { mutableStateOf<Station?>(null) }
     val catalogTab = activeSection == "catalog"
-    var catalogQuery by remember { mutableStateOf("") }
-    var countryFilter by remember { mutableStateOf("") }
-    var languageFilter by remember { mutableStateOf("") }
-    var genreFilter by remember { mutableStateOf("") }
+    var catalogQuery by rememberSaveable { mutableStateOf("") }
+    var countryFilter by rememberSaveable { mutableStateOf("") }
+    var languageFilter by rememberSaveable { mutableStateOf("") }
+    var genreFilter by rememberSaveable { mutableStateOf("") }
     var catalogStations by remember { mutableStateOf<List<Station>>(emptyList()) }
     var catalogLoading by remember { mutableStateOf(false) }
     var catalogError by remember { mutableStateOf("") }
@@ -175,6 +176,10 @@ private fun RadioWaveApp(controller: MediaController?) {
     var errorMessage by remember { mutableStateOf("") }
 
     DisposableEffect(controller, appLanguage) {
+        // A controller can connect to an already-playing background session.
+        currentId = controller?.currentMediaItem?.mediaId.orEmpty()
+        isPlaying = controller?.isPlaying == true
+        isBuffering = controller?.playbackState == Player.STATE_BUFFERING
         val listener = object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: androidx.media3.common.MediaItem?, reason: Int) {
                 currentId = mediaItem?.mediaId.orEmpty()
@@ -208,6 +213,8 @@ private fun RadioWaveApp(controller: MediaController?) {
                     )
                 }
                 if (catalogStations.isEmpty()) catalogError = localText("Станции не найдены. Измените запрос или фильтры.", appLanguage)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (_: Exception) {
                 catalogStations = emptyList()
                 catalogError = localText("Не удалось загрузить Radio Browser. Проверьте интернет и попробуйте ещё раз.", appLanguage)
@@ -218,24 +225,28 @@ private fun RadioWaveApp(controller: MediaController?) {
     }
 
     val current = stations.firstOrNull { it.id == currentId }
-    val filtered = stations.filter { station ->
-        (activeSection != "my_stations" || station.isCustom || station.id.startsWith("rb:")) &&
-        (!favoritesOnly || favorites.contains(station.id)) &&
-            (query.isBlank() || station.name.contains(query, true) ||
-                station.country.contains(query, true) || station.genre.contains(query, true))
+    val filtered = remember(stations, favorites, activeSection, query) {
+        stations.filter { station ->
+            (activeSection != "my_stations" || station.isCustom || station.id.startsWith("rb:")) &&
+                (!favoritesOnly || favorites.contains(station.id)) &&
+                (query.isBlank() || station.name.contains(query, true) ||
+                    station.country.contains(query, true) || station.genre.contains(query, true))
+        }
     }
-    val visibleStations = if (catalogTab) catalogStations else if (favoritesOnly) {
-        val order = favoriteOrder.withIndex().associate { it.value to it.index }
-        filtered.sortedBy { order[it.id] ?: Int.MAX_VALUE }
-    } else filtered
+    val visibleStations = remember(catalogTab, catalogStations, favoritesOnly, filtered, favoriteOrder) {
+        if (catalogTab) catalogStations else if (favoritesOnly) {
+            val order = favoriteOrder.withIndex().associate { it.value to it.index }
+            filtered.sortedBy { order[it.id] ?: Int.MAX_VALUE }
+        } else filtered
+    }
     LaunchedEffect(favorites) {
-        favoriteOrder = store.orderedFavorites().map { it.id }
+        favoriteOrder = store.favoriteOrder()
     }
     val reorderState = rememberFavoriteReorderState()
     val reorderModifier = favoriteReorderModifier(reorderState, !catalogTab && favoritesOnly,
         visibleStations.map { it.id }) { id, targetId ->
         store.moveFavorite(id, targetId)
-        favoriteOrder = store.orderedFavorites().map { it.id }
+        favoriteOrder = store.favoriteOrder()
     }
 
     val bg = if (lightTheme) LightBg else DarkBg
@@ -444,7 +455,7 @@ private fun RadioWaveApp(controller: MediaController?) {
                         store.deleteStation(station.id)
                         stations = store.stations()
                         favorites = store.favorites()
-                        favoriteOrder = store.orderedFavorites().map { it.id }
+                        favoriteOrder = store.favoriteOrder()
                         stationToDelete = null
                     }) { Text(tr("delete_station", appLanguage)) }
                 },
@@ -645,9 +656,7 @@ private val chineseStrings = mapOf(
     "color_teal" to "青色", "color_green" to "绿色", "color_orange" to "橙色", "color_pink" to "粉色"
 )
 
-internal fun tr(key: String, lang: String): String {
-    if (lang == "zh") return chineseStrings[key] ?: key
-    val strings = mapOf(
+private val translatedStrings = mapOf(
         "accent_color" to listOf("Цвет элементов", "Колір елементів", "Accent color", "Akzentfarbe", "Color de acento", "Cor de destaque"),
         "color_purple" to listOf("Фиолетовый", "Фіолетовий", "Purple", "Violett", "Morado", "Roxo"),
         "color_blue" to listOf("Синий", "Синій", "Blue", "Blau", "Azul", "Azul"),
@@ -690,8 +699,11 @@ internal fun tr(key: String, lang: String): String {
         "done" to listOf("Готово", "Готово", "Done", "Fertig", "Listo", "Concluído"),
         "clear" to listOf("Очистить", "Очистити", "Clear", "Leeren", "Limpiar", "Limpar")
     )
+
+internal fun tr(key: String, lang: String): String {
+    if (lang == "zh") return chineseStrings[key] ?: key
     val index = when (lang) { "uk" -> 1; "en" -> 2; "de" -> 3; "es" -> 4; "pt" -> 5; else -> 0 }
-    return strings[key]?.get(index) ?: key
+    return translatedStrings[key]?.get(index) ?: key
 }
 
 @Composable

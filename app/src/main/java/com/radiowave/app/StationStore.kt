@@ -1,12 +1,13 @@
 package com.radiowave.app
 
 import android.content.Context
+import android.content.SharedPreferences
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
-class StationStore(context: Context) {
-    private val prefs = context.getSharedPreferences("radio_wave", Context.MODE_PRIVATE)
+class StationStore internal constructor(private val prefs: SharedPreferences) {
+    constructor(context: Context) : this(context.getSharedPreferences("radio_wave", Context.MODE_PRIVATE))
 
     fun stations(): List<Station> {
         val remote = readSavedStations("radio_browser_stations", isCustom = false)
@@ -42,7 +43,8 @@ class StationStore(context: Context) {
         try {
             val arr = JSONArray(raw)
             for (i in 0 until arr.length()) {
-                val o = arr.getJSONObject(i)
+                val o = arr.optJSONObject(i) ?: continue
+                if (o.optString("id").isBlank() || o.optString("name").isBlank() || o.optString("url").isBlank()) continue
                 result += Station(
                     id = o.getString("id"),
                     name = o.getString("name"),
@@ -89,17 +91,23 @@ class StationStore(context: Context) {
 
     fun favorites(): Set<String> = prefs.getStringSet("favorites", emptySet())?.toSet() ?: emptySet()
 
-    fun orderedFavorites(): List<Station> {
+    fun favoriteOrder(): List<String> {
         val favorites = favorites()
-        val stations = stations().filter { it.id in favorites }.associateBy { it.id }
         val savedOrder = try { JSONArray(prefs.getString("favorite_order", "[]")) }
             catch (_: Exception) { JSONArray() }
         val orderedIds = (0 until savedOrder.length()).map { savedOrder.optString(it) }
-        return (orderedIds + stations.keys).distinct().mapNotNull { stations[it] }
+            .filter { it in favorites }.distinct()
+        if (orderedIds.containsAll(favorites)) return orderedIds
+        return (orderedIds + stations().map { it.id }.filter { it in favorites }).distinct()
+    }
+
+    fun orderedFavorites(): List<Station> {
+        val stations = stations().associateBy { it.id }
+        return favoriteOrder().mapNotNull { stations[it] }
     }
 
     fun moveFavorite(id: String, targetId: String) {
-        val ids = orderedFavorites().map { it.id }.toMutableList()
+        val ids = favoriteOrder().toMutableList()
         val from = ids.indexOf(id)
         val to = ids.indexOf(targetId)
         if (from < 0 || to < 0 || from == to) return
@@ -108,7 +116,7 @@ class StationStore(context: Context) {
     }
 
     fun toggleFavorite(id: String): Set<String> {
-        val order = orderedFavorites().map { it.id }.toMutableList()
+        val order = favoriteOrder().toMutableList()
         val next = favorites().toMutableSet().apply { if (!add(id)) remove(id) }
         order.remove(id)
         if (id in next) order.add(id)

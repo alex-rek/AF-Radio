@@ -26,6 +26,7 @@ import androidx.media3.session.MediaSessionService
  * Background radio playback. Hardware/media-session Next and Previous commands
  * navigate the user's favorites in the same order as the app's station list.
  */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 class RadioPlaybackService : MediaSessionService() {
     private lateinit var exoPlayer: ExoPlayer
     private var mediaSession: MediaSession? = null
@@ -69,11 +70,11 @@ class RadioPlaybackService : MediaSessionService() {
         }
     }
 
-    private fun AudioDeviceInfo.isBluetoothOutput(): Boolean = type in setOf(
-        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
-        AudioDeviceInfo.TYPE_BLE_HEADSET, AudioDeviceInfo.TYPE_BLE_SPEAKER,
-        AudioDeviceInfo.TYPE_BLE_BROADCAST
-    )
+    private fun AudioDeviceInfo.isBluetoothOutput(): Boolean =
+        type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP || type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+            (android.os.Build.VERSION.SDK_INT >= 31 &&
+                (type == AudioDeviceInfo.TYPE_BLE_HEADSET || type == AudioDeviceInfo.TYPE_BLE_SPEAKER)) ||
+            (android.os.Build.VERSION.SDK_INT >= 33 && type == AudioDeviceInfo.TYPE_BLE_BROADCAST)
 
     private fun updateBluetoothOutputs() {
         val outputs = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
@@ -81,10 +82,11 @@ class RadioPlaybackService : MediaSessionService() {
         wiredOutputConnected = outputs.any { it.isWiredOutput() }
     }
 
-    private fun AudioDeviceInfo.isWiredOutput(): Boolean = type in setOf(
+    private fun AudioDeviceInfo.isWiredOutput(): Boolean = when (type) {
         AudioDeviceInfo.TYPE_WIRED_HEADSET, AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
-        AudioDeviceInfo.TYPE_USB_HEADSET, AudioDeviceInfo.TYPE_USB_DEVICE
-    )
+        AudioDeviceInfo.TYPE_USB_HEADSET, AudioDeviceInfo.TYPE_USB_DEVICE -> true
+        else -> false
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -113,12 +115,21 @@ class RadioPlaybackService : MediaSessionService() {
         androidx.core.content.ContextCompat.registerReceiver(this, noisyReceiver,
             IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY),
             androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
-        try {
-            equalizer = Equalizer(0, exoPlayer.audioSessionId).apply { enabled = true }
-            applyEqualizer(prefs.getInt("eq_low", 0), prefs.getInt("eq_mid", 0), prefs.getInt("eq_high", 0))
-        } catch (_: Exception) { equalizer = null }
-
         exoPlayer.addListener(object : Player.Listener {
+            override fun onAudioSessionIdChanged(audioSessionId: Int) {
+                try { equalizer?.release() } catch (_: Exception) { }
+                equalizer = null
+                if (audioSessionId == C.AUDIO_SESSION_ID_UNSET) return
+                try {
+                    equalizer = Equalizer(0, audioSessionId).apply { enabled = true }
+                    applyEqualizer(prefs.getInt("eq_low", 0), prefs.getInt("eq_mid", 0), prefs.getInt("eq_high", 0))
+                } catch (_: Exception) { equalizer = null }
+            }
+
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                if (!playWhenReady) cancelReconnect()
+            }
+
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                 scheduleReconnect()
             }
@@ -128,6 +139,7 @@ class RadioPlaybackService : MediaSessionService() {
                     retryAttempt = 0
                     cancelReconnect()
                 }
+                if (playbackState == Player.STATE_IDLE && exoPlayer.playerError == null) cancelReconnect()
             }
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
@@ -179,7 +191,7 @@ class RadioPlaybackService : MediaSessionService() {
 
     private fun scheduleReconnect() {
         cancelReconnect()
-        if (!::exoPlayer.isInitialized || exoPlayer.currentMediaItem == null) return
+        if (!::exoPlayer.isInitialized || exoPlayer.currentMediaItem == null || !exoPlayer.playWhenReady) return
 
         val delays = longArrayOf(2_000L, 4_000L, 8_000L, 16_000L, 32_000L, 60_000L)
         val delay = delays[retryAttempt.coerceAtMost(delays.lastIndex)]
@@ -189,10 +201,9 @@ class RadioPlaybackService : MediaSessionService() {
         retryRunnable = Runnable {
             // Do not restart a different station if the user changed stations while waiting.
             if (exoPlayer.currentMediaItem?.mediaId == expectedMediaId &&
-                exoPlayer.playbackState == Player.STATE_IDLE
+                exoPlayer.playbackState == Player.STATE_IDLE && exoPlayer.playWhenReady && exoPlayer.playerError != null
             ) {
                 exoPlayer.prepare()
-                exoPlayer.play()
             }
         }
         mainHandler.postDelayed(retryRunnable!!, delay)
@@ -219,6 +230,21 @@ class RadioPlaybackService : MediaSessionService() {
         private val player: ExoPlayer,
         private val favoriteProvider: () -> List<Station>
     ) : ForwardingPlayer(player) {
+
+        override fun setPlayWhenReady(playWhenReady: Boolean) {
+            // stop() leaves ExoPlayer idle; Play must prepare the stream again.
+            if (playWhenReady && player.playbackState == Player.STATE_IDLE && player.currentMediaItem != null) {
+                player.prepare()
+            }
+            player.playWhenReady = playWhenReady
+        }
+
+        override fun play() = setPlayWhenReady(true)
+
+        override fun stop() {
+            player.pause()
+            player.stop()
+        }
 
         // Expose skip commands to Android's media controls even though each radio
         // station is a live stream rather than a finite playlist track.

@@ -4,6 +4,10 @@ import org.json.JSONArray
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 
 /**
  * Small Radio Browser API client. Requests run on Dispatchers.IO from the UI.
@@ -13,7 +17,7 @@ object RadioBrowserRepository {
     data class FilterOption(val value: String, val code: String)
     private val filterCache = java.util.concurrent.ConcurrentHashMap<String, List<FilterOption>>()
 
-    fun filterOptions(kind: String): List<FilterOption> {
+    suspend fun filterOptions(kind: String): List<FilterOption> {
         require(kind in setOf("countries", "languages", "tags"))
         filterCache[kind]?.let { return it }
         val array = JSONArray(request("/json/$kind?hidebroken=true&order=stationcount&reverse=true&limit=100000"))
@@ -33,7 +37,7 @@ object RadioBrowserRepository {
         "https://nl1.api.radio-browser.info"
     )
 
-    fun search(name: String, country: String, language: String, tag: String): List<Station> {
+    suspend fun search(name: String, country: String, language: String, tag: String): List<Station> {
         val params = linkedMapOf(
             "hidebroken" to "true",
             "limit" to "100",
@@ -51,9 +55,10 @@ object RadioBrowserRepository {
         return parse(request("/json/stations/search?$query"))
     }
 
-    private fun request(path: String): String {
+    private suspend fun request(path: String): String = withContext(Dispatchers.IO) {
         var lastError: Exception? = null
         for (mirror in mirrors) {
+            currentCoroutineContext().ensureActive()
             var connection: HttpURLConnection? = null
             try {
                 connection = (URL("$mirror$path").openConnection() as HttpURLConnection).apply {
@@ -67,8 +72,10 @@ object RadioBrowserRepository {
                     throw IllegalStateException("Radio Browser HTTP ${connection.responseCode}")
                 }
                 val body = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-                return body
+                currentCoroutineContext().ensureActive()
+                return@withContext body
             } catch (e: Exception) {
+                currentCoroutineContext().ensureActive()
                 lastError = e
             } finally {
                 connection?.disconnect()
