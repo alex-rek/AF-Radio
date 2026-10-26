@@ -757,6 +757,8 @@ private fun SettingsDialog(
             val wide = maxWidth >= 560.dp
             val settingsScroll = androidx.compose.foundation.rememberScrollState()
             Column(Modifier.fillMaxWidth().heightIn(max = if (wide) 620.dp else 520.dp).verticalScroll(settingsScroll), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                AppUpdateSettings(language)
+                HorizontalDivider()
                 Text(tr("start_section", language), fontWeight = FontWeight.SemiBold, color = fg)
                 SettingsDropdown(
                     value = startSection,
