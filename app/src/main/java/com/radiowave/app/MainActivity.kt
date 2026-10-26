@@ -136,6 +136,7 @@ private fun RadioWaveApp(controller: MediaController?) {
     val appLanguage = languageOverride?.takeIf { it in supportedLanguages } ?: systemLanguage
     var startSection by remember { mutableStateOf(prefs.getString("start_section", "my_stations") ?: "my_stations") }
     var continueAfterBt by remember { mutableStateOf(prefs.getBoolean("continue_after_bt", false)) }
+    var rememberLastStation by remember { mutableStateOf(prefs.getBoolean("remember_last_station", true)) }
     var themeMode by remember {
         mutableStateOf(prefs.getString("theme_mode", null) ?: if (prefs.contains("light_theme")) {
             if (prefs.getBoolean("light_theme", false)) "light" else "dark"
@@ -243,6 +244,19 @@ private fun RadioWaveApp(controller: MediaController?) {
         favoriteOrder = store.favoriteOrder()
     }
     val reorderState = rememberFavoriteReorderState()
+    val visibleStationIds = remember(visibleStations) { visibleStations.map { it.id } }
+    LaunchedEffect(currentId, visibleStationIds) {
+        val index = visibleStationIds.indexOf(currentId)
+        if (index < 0 || reorderState.draggedId != null) return@LaunchedEffect
+        withFrameNanos { }
+        val layout = reorderState.listState.layoutInfo
+        val currentItem = layout.visibleItemsInfo.firstOrNull { it.key == currentId }
+        val fullyVisible = currentItem != null && currentItem.offset >= layout.viewportStartOffset &&
+            currentItem.offset + currentItem.size <= layout.viewportEndOffset
+        if (!fullyVisible && reorderState.draggedId == null) {
+            reorderState.listState.animateScrollToItem(index)
+        }
+    }
     val reorderModifier = favoriteReorderModifier(reorderState, !catalogTab && favoritesOnly,
         visibleStations.map { it.id }) { id, targetId ->
         store.moveFavorite(id, targetId)
@@ -481,6 +495,12 @@ private fun RadioWaveApp(controller: MediaController?) {
         }
         if (showSettings) {
             SettingsDialog(
+                rememberLastStation = rememberLastStation, onRememberLastStation = { enabled ->
+                    rememberLastStation = enabled
+                    prefs.edit().putBoolean("remember_last_station", enabled).apply()
+                    if (enabled) controller?.currentMediaItem?.mediaId?.let(store::rememberLastStation)
+                    else store.clearLastStation()
+                },
                 accentChoice = accentChoice, onAccentChoice = { accentChoice = it; prefs.edit().putString("accent_color", it).apply() },
                 startSection = startSection, onStartSection = { startSection = it; prefs.edit().putString("start_section", it).apply() },
                 continueAfterBt = continueAfterBt, onContinueAfterBt = { continueAfterBt = it; prefs.edit().putBoolean("continue_after_bt", it).apply() },
@@ -637,6 +657,8 @@ private fun AddStationDialog(language: String, onDismiss: () -> Unit, onAdd: (St
 
 
 private val chineseStrings = mapOf(
+    "remember_last_station" to "记住上次收听的电台",
+    "remember_station_hint" to "启动时恢复上次的电台，点击播放即可继续收听。",
     "delete_station" to "删除电台",
     "delete_station_confirm" to "要从我的电台和收藏中删除“{station}”吗？",
     "cancel" to "取消", "any_filter" to "全部", "no_filter_matches" to "未找到匹配项",
@@ -657,6 +679,8 @@ private val chineseStrings = mapOf(
 )
 
 private val translatedStrings = mapOf(
+        "remember_last_station" to listOf("Запоминать последнюю радиостанцию", "Запам’ятовувати останню радіостанцію", "Remember the last station", "Letzten Sender merken", "Recordar la última emisora", "Lembrar a última estação"),
+        "remember_station_hint" to listOf("При запуске восстановится последняя станция. Нажмите Play, чтобы продолжить.", "Під час запуску відновиться остання станція. Натисніть Play, щоб продовжити.", "Restore the last station on startup. Press Play to continue.", "Beim Start den letzten Sender wiederherstellen. Zum Fortsetzen Play drücken.", "Restaura la última emisora al iniciar. Pulsa Play para continuar.", "Restaura a última estação ao iniciar. Toque em Play para continuar."),
         "accent_color" to listOf("Цвет элементов", "Колір елементів", "Accent color", "Akzentfarbe", "Color de acento", "Cor de destaque"),
         "color_purple" to listOf("Фиолетовый", "Фіолетовий", "Purple", "Violett", "Morado", "Roxo"),
         "color_blue" to listOf("Синий", "Синій", "Blue", "Blau", "Azul", "Azul"),
@@ -708,6 +732,7 @@ internal fun tr(key: String, lang: String): String {
 
 @Composable
 private fun SettingsDialog(
+    rememberLastStation: Boolean, onRememberLastStation: (Boolean) -> Unit,
     accentChoice: String, onAccentChoice: (String) -> Unit,
     startSection: String, onStartSection: (String) -> Unit,
     continueAfterBt: Boolean, onContinueAfterBt: (Boolean) -> Unit,
@@ -740,6 +765,12 @@ private fun SettingsDialog(
                     },
                     onSelect = onStartSection
                 )
+                HorizontalDivider()
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(tr("remember_last_station", language), color = fg, modifier = Modifier.weight(1f).padding(end = 8.dp))
+                    Switch(checked = rememberLastStation, onCheckedChange = onRememberLastStation)
+                }
+                Text(tr("remember_station_hint", language), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
                 HorizontalDivider()
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text(tr("continue_after_bt", language), color = fg, modifier = Modifier.weight(1f).padding(end = 8.dp))

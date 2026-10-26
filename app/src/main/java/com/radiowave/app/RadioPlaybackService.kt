@@ -92,6 +92,7 @@ class RadioPlaybackService : MediaSessionService() {
         super.onCreate()
 
         val prefs = getSharedPreferences("af_radio_settings", MODE_PRIVATE)
+        val stationStore = StationStore(this)
         val bufferSeconds = prefs.getInt("buffer_seconds", 2).coerceIn(0, 5)
         val minBuffer = (bufferSeconds * 1000).coerceAtLeast(500)
         val loadControl = DefaultLoadControl.Builder()
@@ -143,6 +144,9 @@ class RadioPlaybackService : MediaSessionService() {
             }
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                if (mediaItem != null && prefs.getBoolean("remember_last_station", true)) {
+                    stationStore.rememberLastStation(mediaItem.mediaId)
+                }
                 retryAttempt = 0
                 cancelReconnect()
             }
@@ -153,6 +157,10 @@ class RadioPlaybackService : MediaSessionService() {
             store.orderedFavorites()
         }
         mediaSession = MediaSession.Builder(this, navigationPlayer).build()
+        if (prefs.getBoolean("remember_last_station", true)) {
+            // Restore the selection without starting sound before the user presses Play.
+            stationStore.lastStation()?.let { exoPlayer.setMediaItem(item(it)) }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

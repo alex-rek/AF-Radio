@@ -21,6 +21,7 @@ class StationStore internal constructor(private val prefs: SharedPreferences) {
         val editor = prefs.edit()
             .putStringSet("favorites", favorites() - id)
             .putString("favorite_order", JSONArray(order).toString())
+        if (prefs.getString("last_station", null) == id) editor.remove("last_station")
         if (StationCatalog.builtIn.any { it.id == id }) {
             editor.putStringSet("removed_stations",
                 prefs.getStringSet("removed_stations", emptySet()).orEmpty() + id)
@@ -90,6 +91,19 @@ class StationStore internal constructor(private val prefs: SharedPreferences) {
         .put("logoUrl", station.logoUrl ?: "")
 
     fun favorites(): Set<String> = prefs.getStringSet("favorites", emptySet())?.toSet() ?: emptySet()
+
+    fun rememberLastStation(id: String) {
+        prefs.edit().putString("last_station", id).apply()
+    }
+
+    fun lastStation(): Station? {
+        val id = prefs.getString("last_station", null) ?: return null
+        return stations().firstOrNull { it.id == id }
+    }
+
+    fun clearLastStation() {
+        prefs.edit().remove("last_station").apply()
+    }
 
     fun favoriteOrder(): List<String> {
         val favorites = favorites()

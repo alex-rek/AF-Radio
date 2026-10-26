@@ -67,6 +67,28 @@ class StationStoreTest {
             .putString("favorite_order", "invalid json").apply()
         assertEquals(listOf("r1", "r2"), store.favoriteOrder())
     }
+
+    @Test fun lastStationSurvivesReloadAndCanBeCleared() {
+        assertNull(store.lastStation())
+        store.rememberLastStation("r2")
+        assertEquals("r2", StationStore(prefs).lastStation()?.id)
+        store.clearLastStation()
+        assertNull(StationStore(prefs).lastStation())
+    }
+
+    @Test fun deletedLastStationIsNotRestored() {
+        store.rememberLastStation("r1")
+        store.deleteStation("r1")
+        assertNull(StationStore(prefs).lastStation())
+        assertFalse(prefs.contains("last_station"))
+    }
+
+    @Test fun lastCatalogStationIsRestoredWithItsStream() {
+        val station = Station("rb:last", "Last catalog station", "https://example.com/live")
+        store.saveRadioBrowserStation(station)
+        store.rememberLastStation(station.id)
+        assertEquals(station.url, StationStore(prefs).lastStation()?.url)
+    }
 }
 
 /** In-memory Android preferences contract; no device, disk or network required. */
