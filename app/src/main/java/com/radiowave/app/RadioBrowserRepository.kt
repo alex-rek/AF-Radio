@@ -1,8 +1,7 @@
 package com.radiowave.app
 
 import org.json.JSONArray
-import java.net.HttpURLConnection
-import java.net.URL
+import okhttp3.Request
 import java.net.URLEncoder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
@@ -59,26 +58,18 @@ object RadioBrowserRepository {
         var lastError: Exception? = null
         for (mirror in mirrors) {
             currentCoroutineContext().ensureActive()
-            var connection: HttpURLConnection? = null
             try {
-                connection = (URL("$mirror$path").openConnection() as HttpURLConnection).apply {
-                    requestMethod = "GET"
-                    connectTimeout = 10_000
-                    readTimeout = 15_000
-                    setRequestProperty("Accept", "application/json")
-                    setRequestProperty("User-Agent", "RadioWave Android Internet Radio")
+                val request = Request.Builder().url("$mirror$path").header("Accept", "application/json")
+                    .header("User-Agent", "AF-Radio").build()
+                RadioNetwork.client().newCall(request).execute().use { response ->
+                    check(response.isSuccessful) { "Radio Browser HTTP ${response.code}" }
+                    val body = requireNotNull(response.body).string()
+                    currentCoroutineContext().ensureActive()
+                    return@withContext body
                 }
-                if (connection.responseCode !in 200..299) {
-                    throw IllegalStateException("Radio Browser HTTP ${connection.responseCode}")
-                }
-                val body = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-                currentCoroutineContext().ensureActive()
-                return@withContext body
             } catch (e: Exception) {
                 currentCoroutineContext().ensureActive()
                 lastError = e
-            } finally {
-                connection?.disconnect()
             }
         }
         throw lastError ?: IllegalStateException("Не удалось подключиться к Radio Browser")

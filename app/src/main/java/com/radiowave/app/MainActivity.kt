@@ -108,10 +108,20 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        RadioNetwork.initialize(this)
         val token = SessionToken(this, ComponentName(this, RadioPlaybackService::class.java))
         controllerFuture = MediaController.Builder(this, token).buildAsync()
         controllerFuture.addListener({
-            try { controllerState = controllerFuture.get() } catch (_: Exception) { }
+            try {
+                controllerState = controllerFuture.get()
+                val prefs = getSharedPreferences("af_radio_settings", MODE_PRIVATE)
+                if (savedInstanceState == null && prefs.getBoolean("remember_last_station", true) &&
+                    prefs.getBoolean("restore_playback", false)) {
+                    controllerState?.let { player ->
+                        if (player.currentMediaItem != null && !player.playWhenReady) player.play()
+                    }
+                }
+            } catch (_: Exception) { }
         }, androidx.core.content.ContextCompat.getMainExecutor(this))
         setContent { RadioWaveApp(controllerState) }
     }
@@ -137,6 +147,7 @@ private fun RadioWaveApp(controller: MediaController?) {
     var startSection by remember { mutableStateOf(prefs.getString("start_section", "my_stations") ?: "my_stations") }
     var continueAfterBt by remember { mutableStateOf(prefs.getBoolean("continue_after_bt", false)) }
     var rememberLastStation by remember { mutableStateOf(prefs.getBoolean("remember_last_station", true)) }
+    var restorePlayback by remember { mutableStateOf(prefs.getBoolean("restore_playback", false)) }
     var themeMode by remember {
         mutableStateOf(prefs.getString("theme_mode", null) ?: if (prefs.contains("light_theme")) {
             if (prefs.getBoolean("light_theme", false)) "light" else "dark"
@@ -495,6 +506,9 @@ private fun RadioWaveApp(controller: MediaController?) {
         }
         if (showSettings) {
             SettingsDialog(
+                restorePlayback = restorePlayback, onRestorePlayback = {
+                    restorePlayback = it; prefs.edit().putBoolean("restore_playback", it).apply()
+                },
                 rememberLastStation = rememberLastStation, onRememberLastStation = { enabled ->
                     rememberLastStation = enabled
                     prefs.edit().putBoolean("remember_last_station", enabled).apply()
@@ -732,6 +746,7 @@ internal fun tr(key: String, lang: String): String {
 
 @Composable
 private fun SettingsDialog(
+    restorePlayback: Boolean, onRestorePlayback: (Boolean) -> Unit,
     rememberLastStation: Boolean, onRememberLastStation: (Boolean) -> Unit,
     accentChoice: String, onAccentChoice: (String) -> Unit,
     startSection: String, onStartSection: (String) -> Unit,
@@ -772,7 +787,11 @@ private fun SettingsDialog(
                     Text(tr("remember_last_station", language), color = fg, modifier = Modifier.weight(1f).padding(end = 8.dp))
                     Switch(checked = rememberLastStation, onCheckedChange = onRememberLastStation)
                 }
-                Text(tr("remember_station_hint", language), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(extraLabel("restore", language), color = fg, modifier = Modifier.weight(1f).padding(end = 8.dp))
+                    Switch(checked = rememberLastStation && restorePlayback, enabled = rememberLastStation, onCheckedChange = onRestorePlayback)
+                }
+                Text(extraLabel("restore_hint", language), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
                 HorizontalDivider()
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text(tr("continue_after_bt", language), color = fg, modifier = Modifier.weight(1f).padding(end = 8.dp))
@@ -809,6 +828,8 @@ private fun SettingsDialog(
                     }
                 }
                 Text(if (language == "zh") "缓冲设置在重新播放后生效。均衡器需要正在播放，且设备支持。" else if (language == "en") "Buffer changes take effect after playback is restarted. Equalizer requires an active playback session and device support." else if (language == "ru") "Буфер применяется после перезапуска воспроизведения. Эквалайзер требует активного воспроизведения и поддержки устройством." else "Buffer changes take effect after playback restarts. Equalizer requires active playback and device support.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
+                HorizontalDivider()
+                ProxySettings(language)
             }
             }
         },

@@ -15,8 +15,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
+import okhttp3.Request
 
 internal data class AppUpdate(val version: String, val releaseUrl: String, val apkUrl: String?)
 
@@ -24,19 +23,15 @@ internal object AppUpdates {
     private const val REPO = "https://github.com/alex-rek/AF-Radio/releases/"
 
     suspend fun check(currentVersion: String): AppUpdate? = withContext(Dispatchers.IO) {
-        val connection = URL("https://api.github.com/repos/alex-rek/AF-Radio/releases/latest")
-            .openConnection() as HttpURLConnection
-        try {
-            connection.connectTimeout = 8_000
-            connection.readTimeout = 12_000
-            connection.setRequestProperty("Accept", "application/vnd.github+json")
-            connection.setRequestProperty("User-Agent", "AF-Radio/$currentVersion")
-            if (connection.responseCode == 404) return@withContext null
-            require(connection.responseCode == 200) { "GitHub HTTP ${connection.responseCode}" }
-            val body = connection.inputStream.bufferedReader().use { it.readText() }
+        val request = Request.Builder().url("https://api.github.com/repos/alex-rek/AF-Radio/releases/latest")
+            .header("Accept", "application/vnd.github+json").header("User-Agent", "AF-Radio/$currentVersion").build()
+        RadioNetwork.client().newCall(request).execute().use { response ->
+            if (response.code == 404) return@withContext null
+            require(response.code == 200) { "GitHub HTTP ${response.code}" }
+            val body = requireNotNull(response.body).string()
             coroutineContext.ensureActive()
             parse(body, currentVersion)
-        } finally { connection.disconnect() }
+        }
     }
 
     internal fun isNewer(candidate: String, installed: String): Boolean {

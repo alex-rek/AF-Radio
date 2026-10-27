@@ -90,6 +90,7 @@ class RadioPlaybackService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
+        RadioNetwork.initialize(this)
 
         val prefs = getSharedPreferences("af_radio_settings", MODE_PRIVATE)
         val stationStore = StationStore(this)
@@ -98,7 +99,14 @@ class RadioPlaybackService : MediaSessionService() {
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(minBuffer, (minBuffer + 5000).coerceAtLeast(5000), 250, 500)
             .build()
-        exoPlayer = ExoPlayer.Builder(this).setLoadControl(loadControl).build().apply {
+        exoPlayer = ExoPlayer.Builder(this).setLoadControl(loadControl)
+            .setMediaSourceFactory(androidx.media3.exoplayer.source.DefaultMediaSourceFactory(this)
+                .setDataSourceFactory(androidx.media3.datasource.DefaultDataSource.Factory(this,
+                    androidx.media3.datasource.DataSource.Factory {
+                        androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(RadioNetwork.client())
+                            .setUserAgent("AF-Radio").createDataSource()
+                    })))
+            .build().apply {
             setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)
